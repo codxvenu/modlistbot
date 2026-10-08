@@ -7,10 +7,13 @@ import { handleHelpCallback } from "./helpCallback.js";
 import { handleStatusCallback } from "./statusCallback.js";
 import { handlePaginationCallback } from "./pagination.js";
 import { handleMovieSelectCallback } from "./movieSelect.js";
+import { handleSeasonSelectCallback } from "./seasonSelect.js";
 import { handleQualitySelectCallback } from "./qualitySelect.js";
+import { handleSeriesBatchCallback, handleSeriesEpisodesCallback } from "./seriesTypeSelect.js";
+import { handleEpisodeSelectCallback } from "./episodeSelect.js";
 import { handleCdnDownloadCallback } from "./cdnDownload.js";
 import { handleTgDownloadCallback } from "./tgDownload.js";
-import { handleBackCallback } from "./back.js";
+import { handleBackCallback, handleBackToSeasonsCallback } from "./back.js";
 import { handleCancelCallback } from "./cancel.js";
 
 /**
@@ -45,9 +48,14 @@ export async function routeCallback(botClient, event) {
         if (!session && [
             ACTIONS.PAGINATION,
             ACTIONS.SELECT_MOVIE,
+            ACTIONS.SELECT_SEASON,
             ACTIONS.SELECT_QUALITY,
+            ACTIONS.SELECT_SERIES_BATCH,
+            ACTIONS.SELECT_SERIES_EPISODES,
+            ACTIONS.SELECT_EPISODE,
             ACTIONS.DOWNLOAD_CDN,
             ACTIONS.DOWNLOAD_TG,
+            ACTIONS.BACK_TO_SEASONS,
             ACTIONS.BACK,
             ACTIONS.CANCEL
         ].includes(action)) {
@@ -67,14 +75,29 @@ export async function routeCallback(botClient, event) {
             case ACTIONS.SELECT_MOVIE:
                 return await handleMovieSelectCallback(botClient, event, session, searchId, parts, chatId, messageId);
 
+            case ACTIONS.SELECT_SEASON:
+                return await handleSeasonSelectCallback(botClient, event, session, searchId, parts, chatId, messageId);
+
             case ACTIONS.SELECT_QUALITY:
                 return await handleQualitySelectCallback(botClient, event, session, searchId, parts, chatId, messageId);
+
+            case ACTIONS.SELECT_SERIES_BATCH:
+                return await handleSeriesBatchCallback(botClient, event, session, searchId, parts, chatId, messageId);
+
+            case ACTIONS.SELECT_SERIES_EPISODES:
+                return await handleSeriesEpisodesCallback(botClient, event, session, searchId, parts, chatId, messageId);
+
+            case ACTIONS.SELECT_EPISODE:
+                return await handleEpisodeSelectCallback(botClient, event, session, searchId, parts, chatId, messageId);
 
             case ACTIONS.DOWNLOAD_CDN:
                 return await handleCdnDownloadCallback(botClient, event, session, searchId, parts, chatId, messageId);
 
             case ACTIONS.DOWNLOAD_TG:
                 return await handleTgDownloadCallback(botClient, event, session, searchId, parts, chatId, messageId);
+
+            case ACTIONS.BACK_TO_SEASONS:
+                return await handleBackToSeasonsCallback(botClient, event, session, searchId, chatId, messageId);
 
             case ACTIONS.BACK:
                 return await handleBackCallback(botClient, event, session, searchId, chatId, messageId);

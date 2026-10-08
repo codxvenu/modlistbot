@@ -5,18 +5,21 @@ import { cleanMovieTitle, escapeHtml } from "../../utils/formatters.js";
 import { MESSAGES } from "../../constants/messages.js";
 import { ACTIONS } from "../../constants/actions.js";
 import { buildDownloadMethodKeyboard } from "../../keyboards/downloadMethodKeyboard.js";
+import { buildSeriesTypeKeyboard } from "../../keyboards/seriesTypeKeyboard.js";
+import { handleSeriesEpisodesCallback } from "./seriesTypeSelect.js";
 
 /**
  * Handle quality selection callback: q:<searchId>:<qualityIndex>
- * 1. Extracts download links first.
- * 2. Checks link availability.
- * 3. If nothing available -> prompts to retry or select another quality.
- * 4. If links available -> presents available download options (CDN vs Telegram).
+ * 1. Checks if quality has series options (Batch vs Episodes).
+ * 2. Extracts download links.
+ * 3. Checks link availability.
+ * 4. If nothing available -> prompts to retry or select another quality.
+ * 5. If links available -> presents available download options (CDN vs Telegram).
  */
 export async function handleQualitySelectCallback(botClient, event, session, searchId, parts, chatId, messageId) {
     await answerCallback(botClient, event);
     const qualityIndex = parseInt(parts[2], 10);
-    const quality = session.qualities[qualityIndex];
+    const quality = session.qualities?.find(q => q.id === qualityIndex) || session.qualities?.[qualityIndex];
     const movie = session.selectedMovie;
 
     if (!quality || !movie) return;
@@ -26,7 +29,29 @@ export async function handleQualitySelectCallback(botClient, event, session, sea
     const escapedQualityLabel = escapeHtml(quality.label);
     const movieIndex = session.results.indexOf(movie);
 
-    // 1. Show extracting message first
+    // If series has both batch zip and individual episode links, ask user preference
+    if (quality.episodeLink && quality.zipLink) {
+        const text = MESSAGES.CHOOSE_SERIES_DOWNLOAD_TYPE(escapedCleanTitle, escapedQualityLabel, quality.season);
+        const keyboard = buildSeriesTypeKeyboard(searchId, qualityIndex, {
+            hasBatch: true,
+            hasEpisodes: true,
+            season: quality.season
+        });
+        await botClient.editMessage(chatId, {
+            message: messageId,
+            parseMode: "html",
+            text,
+            buttons: keyboard
+        });
+        return;
+    }
+
+    // If series has only episode links, open episode list directly
+    if (quality.episodeLink && !quality.zipLink) {
+        return await handleSeriesEpisodesCallback(botClient, event, session, searchId, parts, chatId, messageId);
+    }
+
+    // Standard movie or zip-only release: Show extracting message first
     await botClient.editMessage(chatId, {
         message: messageId,
         parseMode: "html",

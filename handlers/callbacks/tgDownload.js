@@ -12,16 +12,34 @@ import { ACTIONS } from "../../constants/actions.js";
 export async function handleTgDownloadCallback(botClient, event, session, searchId, parts, chatId, messageId) {
     await answerCallback(botClient, event);
     const qualityIndex = parseInt(parts[2], 10);
-    const quality = session.qualities[qualityIndex];
+    const episodeIndex = parts[3] !== undefined ? parseInt(parts[3], 10) : null;
+
+    const quality = session.qualities?.find(q => q.id === qualityIndex) || session.qualities?.[qualityIndex];
+    const episode = episodeIndex !== null ? session.episodes?.[episodeIndex] : null;
     const movie = session.selectedMovie;
 
     if (!quality || !movie) return;
 
     const cleanTitle = cleanMovieTitle(movie.title);
-    const escapedCleanTitle = escapeHtml(cleanTitle);
+    const displayTitle = episode
+        ? `${cleanTitle} - S${String(quality.season || 1).padStart(2, "0")}${episode.shortLabel || `E${episode.episodeNumber}`}`
+        : (quality.season ? `${cleanTitle} (Season ${quality.season})` : cleanTitle);
+
+    const escapedCleanTitle = escapeHtml(displayTitle);
     const escapedQualityLabel = escapeHtml(quality.label);
     const movieIndex = session.results.indexOf(movie);
-    const cacheKey = getCacheKey(movie.title, quality.label);
+    const cacheKey = getCacheKey(displayTitle, quality.label);
+
+    const targetUrl = episode ? episode.url : (quality.zipLink || quality.link);
+    const linkCacheKey = episode ? `ep_${qualityIndex}_${episodeIndex}` : `batch_${qualityIndex}`;
+
+    const backAction = episodeIndex !== null
+        ? `${ACTIONS.SELECT_SERIES_EPISODES}:${searchId}:${qualityIndex}`
+        : (quality.season ? `${ACTIONS.SELECT_QUALITY}:${searchId}:${qualityIndex}` : `${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`);
+
+    const retryAction = episodeIndex !== null
+        ? `${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}:${episodeIndex}`
+        : `${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}`;
 
     let deliveredFwd = null;
 
@@ -46,12 +64,12 @@ export async function handleTgDownloadCallback(botClient, event, session, search
         });
 
         try {
-            let links = session.extractedLinks?.[qualityIndex];
+            let links = session.extractedLinks?.[linkCacheKey];
             if (!links || !links.token) {
-                console.log(`[Scraper] Extracting links for: ${quality.link}`);
-                links = await extractLinks(quality.link);
+                console.log(`[Scraper] Extracting links for: ${targetUrl}`);
+                links = await extractLinks(targetUrl);
                 if (!session.extractedLinks) session.extractedLinks = {};
-                session.extractedLinks[qualityIndex] = links;
+                session.extractedLinks[linkCacheKey] = links;
             }
 
             if (!links.token) {
@@ -60,9 +78,7 @@ export async function handleTgDownloadCallback(botClient, event, session, search
                     parseMode: "html",
                     text: MESSAGES.NO_LINKS_AVAILABLE(escapedCleanTitle, escapedQualityLabel),
                     buttons: botClient.buildReplyMarkup([
-                        [
-                            Button.inline("🔙 Back to Qualities", Buffer.from(`${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`))
-                        ]
+                        [Button.inline(episodeIndex !== null ? "🔙 Back to Episodes" : "🔙 Back", Buffer.from(backAction))]
                     ])
                 });
                 return;
@@ -73,7 +89,7 @@ export async function handleTgDownloadCallback(botClient, event, session, search
                 token: links.token,
                 botUsername: links.botUsername,
                 userChatId: chatId,
-                movieTitle: movie.title,
+                movieTitle: displayTitle,
                 qualityLabel: quality.label,
                 botClient
             });
@@ -84,15 +100,9 @@ export async function handleTgDownloadCallback(botClient, event, session, search
                 parseMode: "html",
                 text: MESSAGES.DELIVERY_ERROR,
                 buttons: botClient.buildReplyMarkup([
-                    [
-                        Button.inline("🔄 Try Again", Buffer.from(`${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}`))
-                    ],
-                    [
-                        Button.inline("🔙 Back to Qualities", Buffer.from(`${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`))
-                    ],
-                    [
-                        Button.inline("❌ Cancel", Buffer.from(`${ACTIONS.CANCEL}:${searchId}`))
-                    ]
+                    [Button.inline("🔄 Try Again", Buffer.from(retryAction))],
+                    [Button.inline(episodeIndex !== null ? "🔙 Back to Episodes" : "🔙 Back", Buffer.from(backAction))],
+                    [Button.inline("❌ Cancel", Buffer.from(`${ACTIONS.CANCEL}:${searchId}`))]
                 ])
             });
             return;
@@ -129,12 +139,8 @@ export async function handleTgDownloadCallback(botClient, event, session, search
                 parseMode: "html",
                 text: MESSAGES.FILE_DELETED(escapedCleanTitle, escapedQualityLabel),
                 buttons: botClient.buildReplyMarkup([
-                    [
-                        Button.inline("🔄 Get File Again", Buffer.from(`${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}`))
-                    ],
-                    [
-                        Button.inline("🔙 Back to Qualities", Buffer.from(`${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`))
-                    ]
+                    [Button.inline("🔄 Get File Again", Buffer.from(retryAction))],
+                    [Button.inline(episodeIndex !== null ? "🔙 Back to Episodes" : "🔙 Back", Buffer.from(backAction))]
                 ])
             });
         } catch (delErr) {

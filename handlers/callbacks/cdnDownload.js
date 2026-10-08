@@ -11,18 +11,28 @@ import { ACTIONS } from "../../constants/actions.js";
 export async function handleCdnDownloadCallback(botClient, event, session, searchId, parts, chatId, messageId) {
     await answerCallback(botClient, event);
     const qualityIndex = parseInt(parts[2], 10);
-    const quality = session.qualities[qualityIndex];
+    const episodeIndex = parts[3] !== undefined ? parseInt(parts[3], 10) : null;
+
+    const quality = session.qualities?.find(q => q.id === qualityIndex) || session.qualities?.[qualityIndex];
+    const episode = episodeIndex !== null ? session.episodes?.[episodeIndex] : null;
     const movie = session.selectedMovie;
 
     if (!quality || !movie) return;
 
     const cleanTitle = cleanMovieTitle(movie.title);
-    const escapedCleanTitle = escapeHtml(cleanTitle);
+    const displayTitle = episode
+        ? `${cleanTitle} - S${String(quality.season || 1).padStart(2, "0")}${episode.shortLabel || `E${episode.episodeNumber}`}`
+        : (quality.season ? `${cleanTitle} (Season ${quality.season})` : cleanTitle);
+
+    const escapedCleanTitle = escapeHtml(displayTitle);
     const escapedQualityLabel = escapeHtml(quality.label);
     const movieIndex = session.results.indexOf(movie);
 
+    const targetUrl = episode ? episode.url : (quality.zipLink || quality.link);
+    const linkCacheKey = episode ? `ep_${qualityIndex}_${episodeIndex}` : `batch_${qualityIndex}`;
+
     // Retrieve already-extracted link from session or extract fresh if expired
-    let links = session.extractedLinks?.[qualityIndex];
+    let links = session.extractedLinks?.[linkCacheKey];
     if (!links || !links.cdnLink) {
         await botClient.editMessage(chatId, {
             message: messageId,
@@ -31,26 +41,27 @@ export async function handleCdnDownloadCallback(botClient, event, session, searc
         });
 
         try {
-            console.log(`[CDN] Extracting fresh instant download link for: ${quality.link}`);
-            links = await extractLinks(quality.link);
+            console.log(`[CDN] Extracting fresh instant download link for: ${targetUrl}`);
+            links = await extractLinks(targetUrl);
             if (!session.extractedLinks) session.extractedLinks = {};
-            session.extractedLinks[qualityIndex] = links;
+            session.extractedLinks[linkCacheKey] = links;
         } catch (err) {
             console.error("[CDN] Extraction error:", err);
+            const retryAction = episodeIndex !== null
+                ? `${ACTIONS.DOWNLOAD_CDN}:${searchId}:${qualityIndex}:${episodeIndex}`
+                : `${ACTIONS.DOWNLOAD_CDN}:${searchId}:${qualityIndex}`;
+            const backAction = episodeIndex !== null
+                ? `${ACTIONS.SELECT_SERIES_EPISODES}:${searchId}:${qualityIndex}`
+                : (quality.season ? `${ACTIONS.SELECT_QUALITY}:${searchId}:${qualityIndex}` : `${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`);
+
             await botClient.editMessage(chatId, {
                 message: messageId,
                 parseMode: "html",
                 text: MESSAGES.DELIVERY_ERROR,
                 buttons: botClient.buildReplyMarkup([
-                    [
-                        Button.inline("🔄 Try Again", Buffer.from(`${ACTIONS.DOWNLOAD_CDN}:${searchId}:${qualityIndex}`))
-                    ],
-                    [
-                        Button.inline("🔙 Back to Qualities", Buffer.from(`${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`))
-                    ],
-                    [
-                        Button.inline("❌ Cancel", Buffer.from(`${ACTIONS.CANCEL}:${searchId}`))
-                    ]
+                    [Button.inline("🔄 Try Again", Buffer.from(retryAction))],
+                    [Button.inline(episodeIndex !== null ? "🔙 Back to Episodes" : "🔙 Back", Buffer.from(backAction))],
+                    [Button.inline("❌ Cancel", Buffer.from(`${ACTIONS.CANCEL}:${searchId}`))]
                 ])
             });
             return;
@@ -63,18 +74,22 @@ export async function handleCdnDownloadCallback(botClient, event, session, searc
         if (links) links.cdnLink = cdnLink;
     }
 
+    const backAction = episodeIndex !== null
+        ? `${ACTIONS.SELECT_SERIES_EPISODES}:${searchId}:${qualityIndex}`
+        : (quality.season ? `${ACTIONS.SELECT_QUALITY}:${searchId}:${qualityIndex}` : `${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`);
+
     if (!cdnLink) {
+        const tgAction = episodeIndex !== null
+            ? `${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}:${episodeIndex}`
+            : `${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}`;
+
         await botClient.editMessage(chatId, {
             message: messageId,
             parseMode: "html",
             text: MESSAGES.CDN_NOT_AVAILABLE,
             buttons: botClient.buildReplyMarkup([
-                [
-                    Button.inline("📁 Telegram File", Buffer.from(`${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}`))
-                ],
-                [
-                    Button.inline("🔙 Back to Qualities", Buffer.from(`${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`))
-                ]
+                [Button.inline("📁 Telegram File", Buffer.from(tgAction))],
+                [Button.inline(episodeIndex !== null ? "🔙 Back to Episodes" : "🔙 Back", Buffer.from(backAction))]
             ])
         });
         return;
@@ -82,19 +97,20 @@ export async function handleCdnDownloadCallback(botClient, event, session, searc
 
     // Prepare buttons: Direct File Download URL button + optional Telegram File switch + Back
     const actionButtons = [
-        [
-            Button.url("⚡ Direct Instant Download", cdnLink)
-        ]
+        [Button.url("⚡ Direct Instant Download", cdnLink)]
     ];
 
     if (links?.token) {
+        const tgAction = episodeIndex !== null
+            ? `${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}:${episodeIndex}`
+            : `${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}`;
         actionButtons.push([
-            Button.inline("📁 Send to Telegram Instead", Buffer.from(`${ACTIONS.DOWNLOAD_TG}:${searchId}:${qualityIndex}`))
+            Button.inline("📁 Send to Telegram Instead", Buffer.from(tgAction))
         ]);
     }
 
     actionButtons.push([
-        Button.inline("🔙 Back to Qualities", Buffer.from(`${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`))
+        Button.inline(episodeIndex !== null ? "🔙 Back to Episodes" : "🔙 Back", Buffer.from(backAction))
     ]);
 
     // Send ready message with 5-minute expiry warning
@@ -110,20 +126,20 @@ export async function handleCdnDownloadCallback(botClient, event, session, searc
         try {
             // Invalidate session cached link so "Get Link Again" generates fresh
             if (session.extractedLinks) {
-                delete session.extractedLinks[qualityIndex];
+                delete session.extractedLinks[linkCacheKey];
             }
+
+            const retryAction = episodeIndex !== null
+                ? `${ACTIONS.DOWNLOAD_CDN}:${searchId}:${qualityIndex}:${episodeIndex}`
+                : `${ACTIONS.DOWNLOAD_CDN}:${searchId}:${qualityIndex}`;
 
             await botClient.editMessage(chatId, {
                 message: messageId,
                 parseMode: "html",
                 text: MESSAGES.CDN_LINK_EXPIRED(escapedCleanTitle, escapedQualityLabel),
                 buttons: botClient.buildReplyMarkup([
-                    [
-                        Button.inline("🔄 Get Link Again", Buffer.from(`${ACTIONS.DOWNLOAD_CDN}:${searchId}:${qualityIndex}`))
-                    ],
-                    [
-                        Button.inline("🔙 Back to Qualities", Buffer.from(`${ACTIONS.SELECT_MOVIE}:${searchId}:${movieIndex}`))
-                    ]
+                    [Button.inline("🔄 Get Link Again", Buffer.from(retryAction))],
+                    [Button.inline(episodeIndex !== null ? "🔙 Back to Episodes" : "🔙 Back", Buffer.from(backAction))]
                 ])
             });
         } catch (expireErr) {

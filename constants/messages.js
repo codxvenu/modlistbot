@@ -50,6 +50,37 @@ Select below:`,
 
 Choose quality:`,
 
+    CHOOSE_SEASON: (cleanTitle) =>
+`📺 <b>${cleanTitle}</b>
+
+Select a season:`,
+
+    CHOOSE_QUALITY_SERIES: (cleanTitle, season) =>
+`📺 <b>${cleanTitle}</b> (Season ${season})
+
+Choose quality:`,
+
+    CHOOSE_SERIES_DOWNLOAD_TYPE: (cleanTitle, qualityLabel, season) =>
+`📺 <b>${cleanTitle}</b>${season ? ` (Season ${season})` : ""}
+📦 <b>${qualityLabel}</b>
+
+<b>Choose download option:</b>
+• <b>📦 Full Season Zip:</b> All episodes in one archive
+• <b>🎬 Individual Episodes:</b> Pick a single episode`,
+
+    LOADING_EPISODES: (cleanTitle, qualityLabel) =>
+`⏳ <b>Loading episodes for ${cleanTitle}...</b>
+📦 <b>${qualityLabel}</b>`,
+
+    CHOOSE_EPISODE: (cleanTitle, qualityLabel) =>
+`📺 <b>${cleanTitle}</b>
+📦 <b>${qualityLabel}</b>
+
+Select an episode:`,
+
+    NO_EPISODES: (cleanTitle, qualityLabel) =>
+`⚠️ No individual episode links found for <b>${cleanTitle}</b> (${qualityLabel}).`,
+
     QUALITIES_ERROR: `⚠️ Failed to load qualities. Please try again.`,
 
     SEARCH_CLOSED: `❌ Search closed.`,

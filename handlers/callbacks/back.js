@@ -1,6 +1,7 @@
 import { answerCallback } from "../../utils/callbackHelper.js";
 import { buildSearchKeyboard, PAGE_SIZE } from "../../keyboards/searchKeyboard.js";
-import { escapeHtml } from "../../utils/formatters.js";
+import { buildSeasonKeyboard } from "../../keyboards/seasonKeyboard.js";
+import { cleanMovieTitle, escapeHtml } from "../../utils/formatters.js";
 import { MESSAGES } from "../../constants/messages.js";
 
 /**
@@ -18,6 +19,28 @@ export async function handleBackCallback(botClient, event, session, searchId, ch
         message: messageId,
         parseMode: "html",
         text: resultText,
+        buttons: keyboard
+    });
+}
+
+/**
+ * Handle back to seasons callback: bs:<searchId>
+ */
+export async function handleBackToSeasonsCallback(botClient, event, session, searchId, chatId, messageId) {
+    await answerCallback(botClient, event);
+    const movie = session.selectedMovie;
+    if (!movie || !session.seasons) return;
+
+    const cleanTitle = cleanMovieTitle(movie.title);
+    const escapedCleanTitle = escapeHtml(cleanTitle);
+
+    const seasonText = MESSAGES.CHOOSE_SEASON(escapedCleanTitle);
+    const keyboard = buildSeasonKeyboard(searchId, session.seasons);
+
+    await botClient.editMessage(chatId, {
+        message: messageId,
+        parseMode: "html",
+        text: seasonText,
         buttons: keyboard
     });
 }

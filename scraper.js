@@ -131,48 +131,99 @@ export function formatQualityLabel(rawText) {
 /**
  * Get available qualities for a movie / series page
  * @param {string} movieUrl
- * @returns {Promise<Array<{ label: string, raw: string, link: string }>>}
+ * @returns {Promise<Array<{ id: number, label: string, fullLabel: string, season: number|null, episodeLink: string|null, zipLink: string|null, link: string, raw: string }>>}
  */
 export async function getMovieQualities(movieUrl) {
     const res = await fetch(movieUrl, { headers: { "User-Agent": USER_AGENT } });
     const html = await res.text();
 
-    const sections = [...html.matchAll(/<h4\b[^>]*>([\s\S]*?)<\/h4>([\s\S]*?)(?=<h4|<\/article|<\/div\s*<\/div)/gi)];
+    const sections = [...html.matchAll(/<(h[234])\b[^>]*>([\s\S]*?)<\/\1>([\s\S]*?)(?=<(?:h[234])\b|<\/article|<\/div\s*<\/div)/gi)];
     const qualities = [];
 
     for (const s of sections) {
-        const title = s[1].replace(/<[^>]+>/g, "").trim();
-        if (/related|comment|reply|share|tags/i.test(title)) continue;
+        const title = s[2].replace(/<[^>]+>/g, "").trim();
+        if (/related|comment|reply|share|tags|storyline|screenshot|trailer|synopsis|info:|download game of thrones/i.test(title)) continue;
         
-        const body = s[2];
-        const btnMatch = body.match(/<a\b[^>]*\bhref=["']([^"']*(?:archives|\/archives\/)[^"']*)["'][^>]*>/i) ||
-                         body.match(/<a\b[^>]*\bclass=["'][^"']*maxbutton[^"']*["'][^>]*\bhref=["']([^"']+)["']/i);
+        const body = s[3];
+        const btns = [...body.matchAll(/<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)].map(m => ({
+            href: m[1].replace(/&amp;/g, "&"),
+            text: m[2].replace(/<[^>]+>/g, "").trim()
+        })).filter(b => b.href.includes("archives") || /episode|batch|zip|download|server|links/i.test(b.text));
         
-        if (btnMatch) {
-            qualities.push({
-                label: formatQualityLabel(title),
-                raw: title,
-                link: btnMatch[1]
-            });
-        }
+        if (btns.length === 0) continue;
+
+        // Season detection
+        const seasonMatch = title.match(/Season\s*(\d+)/i) || title.match(/\bS(\d+)\b/i);
+        const season = seasonMatch ? parseInt(seasonMatch[1], 10) : null;
+
+        // Button detection (episode links vs zip batch file)
+        const epBtn = btns.find(b => /episode/i.test(b.text) && !/batch|all/i.test(b.text));
+        const zipBtn = btns.find(b => /batch|zip/i.test(b.text));
+        const genericBtn = btns.find(b => b.href.includes("archives"));
+
+        const primaryLink = (zipBtn || epBtn || genericBtn || btns[0]).href;
+
+        qualities.push({
+            id: qualities.length,
+            label: formatQualityLabel(title),
+            fullLabel: season ? `S${String(season).padStart(2, "0")} • ${formatQualityLabel(title)}` : formatQualityLabel(title),
+            season,
+            episodeLink: epBtn ? epBtn.href : null,
+            zipLink: zipBtn ? zipBtn.href : null,
+            link: primaryLink,
+            raw: title
+        });
     }
 
-    // Fallback if page structure uses standard unnested headings
+    // Fallback if page structure uses unnested headings
     if (qualities.length === 0) {
-        const h4Matches = [...html.matchAll(/<h4\b[^>]*>([\s\S]*?)<\/h4>/gi)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
+        const hMatches = [...html.matchAll(/<(h[34])\b[^>]*>([\s\S]*?)<\/\1>/gi)].map(m => m[2].replace(/<[^>]+>/g, "").trim());
         const buttonMatches = [...html.matchAll(/<a\b[^>]*\bclass=["'][^"']*maxbutton[^"']*["'][^>]*\bhref=["']([^"']+)["']/gi)].map(m => m[1]);
-        const minCount = Math.min(h4Matches.length, buttonMatches.length);
+        const minCount = Math.min(hMatches.length, buttonMatches.length);
         for (let i = 0; i < minCount; i++) {
-            if (/related|comment|reply/i.test(h4Matches[i])) continue;
+            if (/related|comment|reply|storyline/i.test(hMatches[i])) continue;
+            const seasonMatch = hMatches[i].match(/Season\s*(\d+)/i) || hMatches[i].match(/\bS(\d+)\b/i);
+            const season = seasonMatch ? parseInt(seasonMatch[1], 10) : null;
             qualities.push({
-                label: formatQualityLabel(h4Matches[i]),
-                raw: h4Matches[i],
-                link: buttonMatches[i]
+                id: qualities.length,
+                label: formatQualityLabel(hMatches[i]),
+                fullLabel: season ? `S${String(season).padStart(2, "0")} • ${formatQualityLabel(hMatches[i])}` : formatQualityLabel(hMatches[i]),
+                season,
+                episodeLink: null,
+                zipLink: null,
+                link: buttonMatches[i],
+                raw: hMatches[i]
             });
         }
     }
 
     return qualities;
+}
+
+/**
+ * Fetch and extract individual episodes for a series quality
+ * @param {string} episodeArchiveUrl
+ * @returns {Promise<Array<{ episodeNumber: number, label: string, shortLabel: string, url: string }>>}
+ */
+export async function getSeriesEpisodes(episodeArchiveUrl) {
+    const res = await fetch(episodeArchiveUrl, { headers: { "User-Agent": USER_AGENT } });
+    const html = await res.text();
+
+    const aTags = [...html.matchAll(/<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)].map(m => ({
+        url: m[1].replace(/&amp;/g, "&"),
+        text: m[2].replace(/<[^>]+>/g, "").trim()
+    })).filter(a => !/comment|batch/i.test(a.text) && (/episode\s*\d+|ep\s*\d+/i.test(a.text) || a.url.includes("?sid=")));
+
+    return aTags.map((item, idx) => {
+        const epMatch = item.text.match(/Episode\s*(\d+)/i) || item.text.match(/Ep\s*(\d+)/i);
+        const epNum = epMatch ? parseInt(epMatch[1], 10) : (idx + 1);
+        return {
+            episodeNumber: epNum,
+            label: `Episode ${epNum}`,
+            shortLabel: `Ep ${epNum}`,
+            url: item.url
+        };
+    });
 }
 
 /**
@@ -217,24 +268,44 @@ export async function resolveDirectCdnLink(cdnUrl) {
  * Extract final download links:
  * - Telegram Start Token + Bot Username
  * - Direct CDN Download Link (resolved directly to file, no middle page)
- * @param {string} qualityLink
+ * @param {string} qualityLinkOrSid
  * @returns {Promise<{ token: string|null, botUsername: string|null, cdnLink: string|null, rawCdnLink: string|null, tgLink: string|null }>}
  */
-export async function extractLinks(qualityLink) {
+export async function extractLinks(qualityLinkOrSid) {
     const jar = new CookieJar();
+    let nextUrl = qualityLinkOrSid;
+    let referer = "";
 
-    // 1. Fetch archives or series landing page
-    const resA = await fetch(qualityLink, { headers: { "User-Agent": USER_AGENT } });
-    jar.addFromHeaders(resA.headers);
-    const htmlA = await resA.text();
+    // 1. If it's an archives page, fetch it first to find the ?sid= link
+    if (qualityLinkOrSid.includes("/archives/")) {
+        const resA = await fetch(qualityLinkOrSid, { headers: { "User-Agent": USER_AGENT } });
+        jar.addFromHeaders(resA.headers);
+        const htmlA = await resA.text();
 
-    const sidMatch = htmlA.match(/href=["'](https?:\/\/[^"']+\/\?sid=([^"']+))["']/i);
-    if (!sidMatch) throw new Error("Shortener link not found on quality page");
-    const nextUrl = sidMatch[1];
+        const allSidMatches = [...htmlA.matchAll(/<a\b[^>]*\bhref=["'](https?:\/\/[^"']+\/\?sid=([^"']+))["'][^>]*>([\s\S]*?)<\/a>/gi)].map(m => ({
+            url: m[1].replace(/&amp;/g, "&"),
+            sid: m[2],
+            text: m[3].replace(/<[^>]+>/g, "").trim()
+        })).filter(a => !/comment/i.test(a.text));
+
+        if (allSidMatches.length > 0) {
+            // Prefer Fast Server or G-Drive server or Episode 1 over dead batch folder
+            const chosen = allSidMatches.find(a => /fast\s*server|g-drive|gdrive|server\s*1/i.test(a.text)) ||
+                           allSidMatches.find(a => /episode\s*1\b/i.test(a.text)) ||
+                           allSidMatches.find(a => !/batch/i.test(a.text)) ||
+                           allSidMatches[0];
+            nextUrl = chosen.url;
+        } else {
+            const sidMatch = htmlA.match(/href=["'](https?:\/\/[^"']+\/\?sid=([^"']+))["']/i);
+            if (!sidMatch) throw new Error("Shortener link not found on quality page");
+            nextUrl = sidMatch[1];
+        }
+        referer = qualityLinkOrSid;
+    }
 
     // 2. Fetch shortener landing page (?sid=...)
     const resB = await fetch(nextUrl, {
-        headers: { "User-Agent": USER_AGENT, "Referer": qualityLink, "Cookie": jar.getCookieHeader() }
+        headers: { "User-Agent": USER_AGENT, "Referer": referer, "Cookie": jar.getCookieHeader() }
     });
     jar.addFromHeaders(resB.headers);
     const htmlB = await resB.text();
@@ -336,12 +407,12 @@ export async function extractLinks(qualityLink) {
         text: m[2].replace(/<[^>]+>/g, "").trim()
     }));
 
-    const tgLinkObj = aTags.find(a => a.text.toLowerCase().includes("telegram") || a.href.includes("t.me") || a.href.includes("seedtg"));
-    const cdnLinkObj = aTags.find(a => a.text.toLowerCase().includes("instant") || a.text.toLowerCase().includes("download v2") || a.text.toLowerCase().includes("download"));
-
-    if (!tgLinkObj && !cdnLinkObj) {
-        throw new Error("No download links found on final Drive page");
-    }
+    const tgLinkObj = aTags.find(a => 
+        (a.href.includes("seedtg") && a.href.includes("start=")) ||
+        (a.href.includes("?start=") && (a.href.includes("t.me") || a.href.includes("seedtg"))) ||
+        (a.text.toLowerCase().includes("telegram") && !a.text.toLowerCase().includes("join") && !a.href.includes("appdrivev5"))
+    );
+    const cdnLinkObj = aTags.find(a => a.href.startsWith("http") && (a.text.toLowerCase().includes("instant") || a.text.toLowerCase().includes("download v2") || a.text.toLowerCase().includes("download")));
 
     // Parse Telegram start token & bot username
     let startToken = null;
